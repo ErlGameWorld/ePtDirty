@@ -1,6 +1,14 @@
 -module(ePtDirty).
--author("Erlang Parse Transform Generator").
+
 -export([parse_transform/2]).
+
+-export([
+   isFlag/2
+   , flagToIndex/1
+   , flagToValue/3
+   , flagToIndexR/1
+   , flagToValueR/3
+]).
 
 %% ===================================================================
 %% 配置宏定义
@@ -297,3 +305,73 @@ atom(Pos, A) -> set_pos(erl_syntax:atom(A), Pos).
 
 %% 设置节点行号（位置信息），这对编译器报错准确性至关重要
 set_pos(Node, Pos) -> erl_syntax:set_pos(Node, Pos).
+
+%%------------------------------------------------------flag 处理相关函数-------------------------------------------------
+
+%% Index: 1, 2, 3 ...
+%% 判断第 Index 位是否为 1
+isFlag(Flag, Index) ->
+   %% 必须先把 Index 转换成掩码 (1 bsl (Index - 1))
+   %% 比如 Index=1 -> 1, Index=3 -> 4 (2#100)
+   Flag band (1 bsl (Index - 1)) =/= 0.
+
+flagToIndex(Flag) ->
+   flagToIndex(Flag, 1, []).
+
+flagToIndex(0, _Index, Acc) ->
+   Acc;
+flagToIndex(Flag, Index, Acc) ->
+   %% 检查最低位是否为 1
+   case (Flag band 1) =:= 1 of
+      true ->
+         flagToIndex(Flag bsr 1, Index + 1, [Index | Acc]);
+      _ ->
+         flagToIndex(Flag bsr 1, Index + 1, Acc)
+   end.
+
+%% Fields 应该是一个包含字段名的 Tuple，例如 {tag, id, hp, mp, ...}
+%% Record 是实际的 record 数据
+flagToValue(Flag, Fields, Record) ->
+   flagToValue(Flag, Fields, Record, 1, []).
+
+flagToValue(0, _Fields, _Record, _Index, Acc) ->
+   Acc;
+flagToValue(Flag, Fields, Record, Index, Acc) ->
+   case (Flag band 1) =:= 1 of
+      true ->
+         flagToValue(Flag bsr 1, Fields, Record, Index + 1, [{element(Index, Fields), element(Index, Record)} | Acc]);
+      _ ->
+         flagToValue(Flag bsr 1, Fields, Record, Index + 1, Acc)
+   end.
+
+flagToIndexR(0) -> [];
+flagToIndexR(Flag) ->
+   MaxBit = trunc(math:log2(Flag)) + 1,
+   flagToIndexR(MaxBit, Flag, []).
+
+flagToIndexR(0, _Flag, Acc) ->
+   Acc;
+flagToIndexR(Index, Flag, Acc) ->
+   Bit = 1 bsl (Index - 1),
+   case (Flag band Bit) =/= 0 of
+      true -> flagToIndexR(Index - 1, Flag, [Index | Acc]);
+      _ -> flagToIndexR(Index - 1, Flag, Acc)
+   end.
+
+%% Fields 应该是一个包含字段名的 Tuple，例如 {tag, id, hp, mp, ...}
+%% Record 是实际的 record 数据
+flagToValueR(0, _Fields, _Record) -> [];
+flagToValueR(Flag, Fields, Record) ->
+   MaxBit = trunc(math:log2(Flag)) + 1,
+   flagToValueR(MaxBit, Flag, Fields, Record, []).
+
+flagToValueR(0, _Flag, _Fields, _Record, Acc) ->
+   Acc;
+flagToValueR(Index, Flag, Fields, Record, Acc) ->
+   Bit = 1 bsl (Index - 1),
+   case (Flag band Bit) =/= 0 of
+      true ->
+         flagToValueR(Index - 1, Flag, Fields, Record, [{element(Index, Fields), element(Index, Record)} | Acc]);
+      _ ->
+         flagToValueR(Index - 1, Flag, Fields, Record, Acc)
+   end.
