@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | [English](README_EN.md)
 
-`ePtDirty` is an Erlang Parse Transform tool. It automatically scans code during compilation, intercepts **Record Update** expressions, and injects logic to maintain a `dirtyFlag` (dirty field bitmap).
+`ePtDirty` is an Erlang Parse Transform tool. It automatically scans code during compilation, intercepts **Record Update** expressions, and injects logic to maintain a `dirty_flag` (dirty field bitmap).
 
 This tool is primarily used in game development or high-frequency data interaction scenarios to facilitate **incremental storage** (writing back to the database) or **incremental synchronization** (sending to clients).
 
@@ -32,7 +32,7 @@ Add the following compilation option to the module where you need to automatical
 
 ### 1.2 Define Record
 
-Your Record definition must include a field named `dirtyFlag`.
+Your Record definition must include a field named `dirty_flag`.
 
 > **Note**: If this field is missing, ePtDirty will ignore the Record without any side effects.
 
@@ -42,7 +42,7 @@ Your Record definition must include a field named `dirtyFlag`.
    hp,
    mp,
    %% [Required] Must specify a default integer value (0 is recommended)
-   dirtyFlag = 0
+   dirty_flag = 0
 }).
 ```
 
@@ -57,7 +57,7 @@ update_hp(P0) ->
 
 %% Compiled Equivalent Code (Pseudo-code)
 update_hp(P0) ->
-   P0#player{hp = 100, dirtyFlag = P0#player.dirtyFlag bor Mask}.
+   P0#player{hp = 100, dirty_flag = P0#player.dirty_flag bor Mask}.
 ```
 
 Where `Mask` is calculated by assigning a bit to each field based on the order of fields in the record definition. The `Mask` is obtained by performing a `bor` operation on the bits corresponding to the fields appearing in the update.
@@ -68,10 +68,10 @@ Where `Mask` is calculated by assigning a bit to each field based on the order o
 
 To ensure code safety and performance, this tool has the following explicit limitations. Please adhere to them when using it.
 
-### ⚠️ 1. `dirtyFlag` Must Have an Integer Default Value
+### ⚠️ 1. `dirty_flag` Must Have an Integer Default Value
 
-* **Rule**: The `dirtyFlag` in the Record definition must have a default value, and it must be an integer.
-* **Bad Example**: `-record(bad, {id, dirtyFlag}).` (Default value is `undefined`)
+* **Rule**: The `dirty_flag` in the Record definition must have a default value, and it must be an integer.
+* **Bad Example**: `-record(bad, {id, dirty_flag}).` (Default value is `undefined`)
 * **Consequence**: Executing `undefined bor Mask` at runtime will throw a **`badarith`** error, causing the process to crash.
 
 ### ⚠️ 2. Wildcard `_` Dirty Flag Capture Not Supported
@@ -89,9 +89,9 @@ To ensure code safety and performance, this tool has the following explicit limi
 ### ⚠️ 4. Only Handles "Updates", Not "Creations"
 
 * **Rule**: Only `Var#rec{...}` (Update) will be injected; `#rec{...}` (Create) will **not** be injected.
-* **Example**: `P = #player{hp = 100}.` -> `dirtyFlag` remains the default value 0.
+* **Example**: `P = #player{hp = 100}.` -> `dirty_flag` remains the default value 0.
 * **Reason**: In Erlang, the AST structures for "Creation" and "Pattern Matching" are identical. Forced injection would break pattern matching logic (e.g., `f(#player{hp=1}) -> ...`).
-* **Suggestion**: If marking is needed upon creation, please specify manually: `#player{hp=100, dirtyFlag=4}`.
+* **Suggestion**: If marking is needed upon creation, please specify manually: `#player{hp=100, dirty_flag=4}`.
 
 ### ⚠️ 5. Temporary Variable Name Conflict Risk (Extremely Low)
 
@@ -126,7 +126,7 @@ The plugin automatically generates temporary variables to ensure the left-value 
 (get_player(Id))#player{hp = 0}.
 %% Equivalent to:
 %% T = get_player(Id),
-%% T#player{hp=0, dirtyFlag = ...}
+%% T#player{hp=0, dirty_flag = ...}
 ```
 
 ### ✅ 2. Nested Structure Updates
@@ -148,10 +148,10 @@ f(P) -> ?HEAL(P).
 
 ### ✅ 4. Manual Override
 
-If the user code manually specifies `dirtyFlag`, the plugin will **respect the user's intent** and skip automatic injection.
+If the user code manually specifies `dirty_flag`, the plugin will **respect the user's intent** and skip automatic injection.
 
 ```erlang
-P#player{hp = 100, dirtyFlag = 0}. %% dirtyFlag result is 0
+P#player{hp = 100, dirty_flag = 0}. %% dirty_flag result is 0
 ```
 
 ---
@@ -161,7 +161,7 @@ P#player{hp = 100, dirtyFlag = 0}. %% dirtyFlag result is 0
 The bitmask calculation relies entirely on the **definition order of the Record fields**.
 
 * **Start Bit**: Starts from `2` (i.e., `1 bsl 1`). Bit 1 is usually reserved for special purposes or to avoid confusion.
-* **Algorithm**: For every field encountered (including `dirtyFlag` itself), shift once: `Bit = Bit bsl 1`.
+* **Algorithm**: For every field encountered (including `dirty_flag` itself), shift once: `Bit = Bit bsl 1`.
 
 **Example:**
 
@@ -170,30 +170,30 @@ The bitmask calculation relies entirely on the **definition order of the Record 
    id,          %% Bit: 2
    name,        %% Bit: 4
    level,       %% Bit: 8
-   dirtyFlag,   %% Bit: 16 (Itself usually not marked, but occupies a place)
+   dirty_flag,   %% Bit: 16 (Itself usually not marked, but occupies a place)
    gold         %% Bit: 32
 }).
 ```
 
 > **🚨 Warning**:
 > **Adjusting the order of Record fields will directly change the Bit mapping values!**
-> If your system uses dirtyFlag for persistent storage or cross-version protocol synchronization, adjusting the field order may lead to data interpretation errors. Please be careful.
+> If your system uses dirty_flag for persistent storage or cross-version protocol synchronization, adjusting the field order may lead to data interpretation errors. Please be careful.
 
 ---
 
 ## 5. Best Practices
 
 1. **Database Write-back Strategy**:
-   Check `dirtyFlag` during persistence.
+   Check `dirty_flag` during persistence.
    ```erlang
    %% Pseudo-code: save only hp and gold
-   NeedSave = (P#player.dirtyFlag band (4 bor 32)) > 0.
+   NeedSave = (P#player.dirty_flag band (4 bor 32)) > 0.
    ```
 
 2. **Resetting Flags**:
-   After data saving or synchronization is complete, be sure to reset the `dirtyFlag` in memory.
+   After data saving or synchronization is complete, be sure to reset the `dirty_flag` in memory.
    ```erlang
-   P_Clean = P_Dirty#player{dirtyFlag = 0}.
+   P_Clean = P_Dirty#player{dirty_flag = 0}.
    ```
 
 3. **Field Count Control**:

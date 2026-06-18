@@ -3,7 +3,7 @@
 [简体中文](README.md) | [English](README_EN.md)
 
 `ePtDirty` 是一个 Erlang 语法转换器（Parse Transform）。它能够在编译期间自动扫描代码，拦截 **Record Update**
-（记录更新）表达式，并自动注入维护 `dirtyFlag`（脏字段位图）的逻辑。
+（记录更新）表达式，并自动注入维护 `dirty_flag`（脏字段位图）的逻辑。
 
 该工具主要用于游戏开发或高频数据交互场景，便于实现数据的**增量存储**（回写数据库）或**增量同步**（发送给客户端）。
 
@@ -33,7 +33,7 @@ debug_info,
 
 ### 1.2 定义 Record
 
-你的 Record 定义中必须包含名为 `dirtyFlag` 的字段。
+你的 Record 定义中必须包含名为 `dirty_flag` 的字段。
 
 > **注意**：如果没有此字段，ePtDirty 会忽略该 Record，不会产生任何副作用。
 
@@ -43,7 +43,7 @@ debug_info,
    hp,
    mp,
    %% [必要配置] 必须指定默认值为整数（建议为 0）
-   dirtyFlag = 0
+   dirty_flag = 0
 }).
 ```
 
@@ -58,7 +58,7 @@ update_hp(P0) ->
 
 %% 编译后的等效代码 (伪代码)
 update_hp(P0) ->
-   P0#player{hp = 100, dirtyFlag = P0#player.dirtyFlag bor Mask}.
+   P0#player{hp = 100, dirty_flag = P0#player.dirty_flag bor Mask}.
 ```
 
 其中 `Mask` 根据 record 定义时字段顺序为每个字段分配一个 bit，本次 update 中出现的字段对应 bit 做 `bor` 得到。
@@ -69,10 +69,10 @@ update_hp(P0) ->
 
 为了保证代码的安全性和性能，本工具在设计上存在以下明确的限制，使用时请务必遵守。
 
-### ⚠️ 1. `dirtyFlag` 必须有整数默认值
+### ⚠️ 1. `dirty_flag` 必须有整数默认值
 
-* **规则**：Record 定义中 `dirtyFlag` 必须指定默认值，且为整数。
-* **错误示例**：`-record(bad, {id, dirtyFlag}).` (默认值为 `undefined`)
+* **规则**：Record 定义中 `dirty_flag` 必须指定默认值，且为整数。
+* **错误示例**：`-record(bad, {id, dirty_flag}).` (默认值为 `undefined`)
 * **后果**：运行时执行 `undefined bor Mask` 会抛出 **`badarith`** 错误导致进程崩溃。
 
 ### ⚠️ 2. 不支持通配符 `_` 的脏标记捕获
@@ -90,9 +90,9 @@ update_hp(P0) ->
 ### ⚠️ 4. 仅处理“更新”，不处理“创建”
 
 * **规则**：只有 `Var#rec{...}` (Update) 会被注入，`#rec{...}` (Create) **不会**被注入。
-* **示例**：`P = #player{hp = 100}.` -> `dirtyFlag` 仍为默认值 0。
+* **示例**：`P = #player{hp = 100}.` -> `dirty_flag` 仍为默认值 0。
 * **原因**：Erlang 中“创建”和“模式匹配”的 AST 结构完全一致。强制注入会导致模式匹配（如 `f(#player{hp=1}) -> ...`）逻辑被破坏。
-* **建议**：如果创建时需要标记，请手动指定：`#player{hp=100, dirtyFlag=4}`。
+* **建议**：如果创建时需要标记，请手动指定：`#player{hp=100, dirty_flag=4}`。
 
 ### ⚠️ 5. 临时变量名冲突风险（极低）
 
@@ -128,7 +128,7 @@ update_hp(P0) ->
 (get_player(Id))#player{hp = 0}.
 %% 等效于:
 %% T = get_player(Id),
-%% T#player{hp=0, dirtyFlag = ...}
+%% T#player{hp=0, dirty_flag = ...}
 ```
 
 ### ✅ 2. 嵌套结构更新
@@ -150,10 +150,10 @@ f(P) -> ?HEAL(P).
 
 ### ✅ 4. 手动覆盖
 
-如果用户代码中手动指定了 `dirtyFlag`，插件会**尊重用户意图**，跳过自动注入。
+如果用户代码中手动指定了 `dirty_flag`，插件会**尊重用户意图**，跳过自动注入。
 
 ```erlang
-P#player{hp = 100, dirtyFlag = 0}. %% dirtyFlag 最终结果为 0
+P#player{hp = 100, dirty_flag = 0}. %% dirty_flag 最终结果为 0
 ```
 
 ---
@@ -163,7 +163,7 @@ P#player{hp = 100, dirtyFlag = 0}. %% dirtyFlag 最终结果为 0
 位掩码（Bitmask）的计算完全依赖于 **Record 字段的定义顺序**。
 
 * **起始位**：从 `2` 开始（即 `1 bsl 1`）。通常保留 Bit 1 用于特殊用途或避免混淆。
-* **算法**：每遇到一个字段（包括 `dirtyFlag` 自身），位移一次 `Bit = Bit bsl 1`。
+* **算法**：每遇到一个字段（包括 `dirty_flag` 自身），位移一次 `Bit = Bit bsl 1`。
 
 **示例：**
 
@@ -172,30 +172,30 @@ P#player{hp = 100, dirtyFlag = 0}. %% dirtyFlag 最终结果为 0
    id,          %% Bit: 2
    name,        %% Bit: 4
    level,       %% Bit: 8
-   dirtyFlag,   %% Bit: 16 (自身通常不标记，但占位)
+   dirty_flag,   %% Bit: 16 (自身通常不标记，但占位)
    gold         %% Bit: 32
 }).
 ```
 
 > **🚨 警告**：
 > **调整 Record 字段的顺序会直接改变 Bit 映射值！**
-> 如果你的系统将 dirtyFlag 用于持久化存储或跨版本协议同步，调整字段顺序可能导致数据含义错乱。请务必小心。
+> 如果你的系统将 dirty_flag 用于持久化存储或跨版本协议同步，调整字段顺序可能导致数据含义错乱。请务必小心。
 
 ---
 
 ## 5. 最佳实践 (Best Practices)
 
 1. **数据库回写策略**：
-   在持久化时，检查 `dirtyFlag`。
+   在持久化时，检查 `dirty_flag`。
    ```erlang
    %% 伪代码：只保存 hp 和 gold
-   NeedSave = (P#player.dirtyFlag band (4 bor 32)) > 0.
+   NeedSave = (P#player.dirty_flag band (4 bor 32)) > 0.
    ```
 
 2. **标记重置**：
-   数据保存或同步完成后，务必将内存中的 `dirtyFlag` 重置。
+   数据保存或同步完成后，务必将内存中的 `dirty_flag` 重置。
    ```erlang
-   P_Clean = P_Dirty#player{dirtyFlag = 0}.
+   P_Clean = P_Dirty#player{dirty_flag = 0}.
    ```
 
 3. **字段数量控制**：

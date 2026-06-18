@@ -14,7 +14,7 @@
 %% 配置宏定义
 %% ===================================================================
 %% 需要自动维护脏标记的字段名
--define(DirtyField, dirtyFlag).
+-define(DirtyField, dirty_flag).
 %% 生成临时变量的前缀，防止与用户变量冲突
 -define(T_VAR_PREFIX, "__PtDirtyT").
 
@@ -23,7 +23,7 @@
 %% ===================================================================
 %% 功能：
 %%   这是一个 Erlang Parse Transform（语法转换器）。
-%%   它在编译期间自动扫描包含 `dirtyFlag` 字段的 Record 定义。
+%%   它在编译期间自动扫描包含 `dirty_flag` 字段的 Record 定义。
 %%   当代码中出现 Record 更新操作（`Var#rec{...}`）时，自动注入脏标记维护逻辑。
 %%
 %% 脏标记逻辑：
@@ -37,20 +37,20 @@
 %%   原因：在 Erlang AST 中，Creation 和 Matching 结构完全一致，无法通过类型区分。
 %%        若错误拦截 Matching，会导致模式匹配逻辑失效。
 %%        而 Update 操作只能出现在表达式中，因此拦截 Update 是绝对安全的。
-%%   3. dirtyFlag 必须是整数（且建议 record 定义中默认值为 0）否则运行时可能出现：undefined bor Mask -> badarg
+%%   3. dirty_flag 必须是整数（且建议 record 定义中默认值为 0）否则运行时可能出现：undefined bor Mask -> badarg
 %% ===================================================================
 
 %% ===================================================================
 %% 1. 入口函数 (Entry Point)
 %% ===================================================================
 %% 工作流程：
-%%   1) 扫描所有 -record(...) 定义，筛选出包含 dirtyFlag 的 record
+%%   1) 扫描所有 -record(...) 定义，筛选出包含 dirty_flag 的 record
 %%   2) 建立元数据：RecMeta = #{RecName => #{FieldName => Bit, ...}}
-%%   3) 将 Forms 转为 syntax tree，然后全树遍历并对 record update 注入 dirtyFlag 逻辑
+%%   3) 将 Forms 转为 syntax tree，然后全树遍历并对 record update 注入 dirty_flag 逻辑
 %%   4) revert 回 Forms
 parse_transform(Forms, _Options) ->
    try
-      %% Step 1: 扫描所有 Record 定义，找出包含 dirtyFlag 的 Record，并计算字段位掩码
+      %% Step 1: 扫描所有 Record 定义，找出包含 dirty_flag 的 Record，并计算字段位掩码
       RecMeta = scan_records(Forms),
 
       case maps:size(RecMeta) of
@@ -145,14 +145,14 @@ inject_update_logic(OriginalNode, Arg, RecName, Fields, FieldBits) ->
 
    %% 分析当前更新语句中包含哪些字段，计算掩码
    %% 解析本次更新的字段列表：
-   %%   MaybeDirtyExpr: 是否出现 dirtyFlag=...
-   %%   OtherFields:    除 dirtyFlag 外的字段节点（保持原样）
+   %%   MaybeDirtyExpr: 是否出现 dirty_flag=...
+   %%   OtherFields:    除 dirty_flag 外的字段节点（保持原样）
    %%   MaskVal:        本次更新字段对应 bit 的 OR 结果
    {MaybeDirtyExpr, OtherFields, MaskVal} = analyze_fields(Fields, FieldBits),
 
    case MaybeDirtyExpr of
       {value, _} ->
-         %% 情况 A：用户在代码中手动给 dirtyFlag 赋值了 (例如 P#player{dirtyFlag=0})
+         %% 情况 A：用户在代码中手动给 dirty_flag 赋值了 (例如 P#player{dirty_flag=0})
          %% 策略：尊重用户意图，不进行自动注入
          OriginalNode;
       undefined ->
@@ -163,7 +163,7 @@ inject_update_logic(OriginalNode, Arg, RecName, Fields, FieldBits) ->
                OriginalNode;
             true ->
                %% 情况 C：检测到受控字段修改
-               %% 策略：注入自动维护代码  追加 dirtyFlag = Old bor Mask
+               %% 策略：注入自动维护代码  追加 dirty_flag = Old bor Mask
                do_update_inject(Pos, Arg, RecName, OtherFields, MaskVal)
          end
    end.
@@ -173,17 +173,17 @@ do_update_inject(Pos, RecExpr, RecName, OtherFields, MaskVal) ->
       variable ->
          %% 情况 C-1：简单变量更新
          %% 源码：P#player{hp = 1}
-         %% 目标：P#player{hp = 1, dirtyFlag = P#player.dirtyFlag bor Mask}
+         %% 目标：P#player{hp = 1, dirty_flag = P#player.dirty_flag bor Mask}
          build_update_ops(Pos, RecExpr, RecName, OtherFields, MaskVal);
       _ ->
          %% 情况 C-2：复杂表达式更新
          %% 源码：(get_player())#player{hp = 1}
-         %% 风险：如果直接替换为 (Expr)#player{..., dirtyFlag = (Expr)#player.dirtyFlag...}
+         %% 风险：如果直接替换为 (Expr)#player{..., dirty_flag = (Expr)#player.dirty_flag...}
          %%      会导致 Expr 被执行两次。如果 Expr 有副作用(side effect)，逻辑会出错。
          %% 目标：
          %%      begin
          %%         Tmp = get_player(),
-         %%         Tmp#player{hp = 1, dirtyFlag = Tmp#player.dirtyFlag bor Mask}
+         %%         Tmp#player{hp = 1, dirty_flag = Tmp#player.dirty_flag bor Mask}
          %%      end
          TmpVar = gen_temp_var(Pos),
          MatchExpr = set_pos(erl_syntax:match_expr(TmpVar, RecExpr), Pos),
@@ -192,14 +192,14 @@ do_update_inject(Pos, RecExpr, RecName, OtherFields, MaskVal) ->
    end.
 
 build_update_ops(Pos, VarExpr, RecName, OtherFields, MaskVal) ->
-   %% 1. 生成获取旧标记的代码: Var#rec.dirtyFlag
+   %% 1. 生成获取旧标记的代码: Var#rec.dirty_flag
    OldFlagExpr = set_pos(erl_syntax:record_access(VarExpr, atom(Pos, RecName), atom(Pos, ?DirtyField)), Pos),
 
    %% 2. 生成计算新标记的代码: OldFlag bor Mask
    MaskExpr = set_pos(erl_syntax:integer(MaskVal), Pos),
    NewFlagExpr = set_pos(erl_syntax:infix_expr(OldFlagExpr, erl_syntax:operator('bor'), MaskExpr), Pos),
 
-   %% 3. 构建新的 dirtyFlag 字段赋值 AST
+   %% 3. 构建新的 dirty_flag 字段赋值 AST
    NewDirtyField = set_pos(erl_syntax:record_field(atom(Pos, ?DirtyField), NewFlagExpr), Pos),
 
    %% 4. 合并所有字段
@@ -213,7 +213,7 @@ build_update_ops(Pos, VarExpr, RecName, OtherFields, MaskVal) ->
 %% ===================================================================
 
 %% analyze_fields/2
-%% 功能：遍历本次更新的所有字段，计算总掩码，并检查用户是否手动操作了 dirtyFlag
+%% 功能：遍历本次更新的所有字段，计算总掩码，并检查用户是否手动操作了 dirty_flag
 %% 返回：{MaybeDirtyExpr, FieldsWithoutDirty, TotalMask}
 analyze_fields(Fields, FieldBits) ->
    lists:foldr(fun(F, {DirtyExpr, FieldsAcc, MaskAcc}) ->
@@ -222,7 +222,7 @@ analyze_fields(Fields, FieldBits) ->
 
       case Name of
          ?DirtyField ->
-            %% 发现用户显式赋值了 dirtyFlag
+            %% 发现用户显式赋值了 dirty_flag
             Val = erl_syntax:record_field_value(F),
 
             %% 如果有多次赋值（虽然语法不允许），取最后一次
@@ -230,7 +230,7 @@ analyze_fields(Fields, FieldBits) ->
                undefined -> {value, Val};
                _ -> DirtyExpr
             end,
-            %% 既然用户手动处理了，我们就不累加 Mask，也不在 FieldsAcc 中保留原有的 dirtyFlag 字段
+            %% 既然用户手动处理了，我们就不累加 Mask，也不在 FieldsAcc 中保留原有的 dirty_flag 字段
             %% (因为外层逻辑会决定是否直接返回 OriginalNode)
             {NewDirty, FieldsAcc, MaskAcc};
          _ ->
@@ -246,14 +246,14 @@ analyze_fields(Fields, FieldBits) ->
 %% ===================================================================
 
 %% scan_records/1
-%% 功能：扫描 AST 中的 attribute，寻找包含 dirtyFlag 的 record 定义
+%% 功能：扫描 AST 中的 attribute，寻找包含 dirty_flag 的 record 定义
 scan_records(Forms) ->
    lists:foldl(fun
       ({attribute, _, record, {Name, Fields}}, Acc) ->
          %% 计算该 Record 所有字段的位分布
          case calc_field_bits(Fields, 2, #{}, false) of
             {true, BitMap} ->
-               %% 只有包含 dirtyFlag 的 Record 才会被记录
+               %% 只有包含 dirty_flag 的 Record 才会被记录
                Acc#{Name => BitMap};
             _ ->
                Acc
@@ -265,7 +265,7 @@ scan_records(Forms) ->
 %% calc_field_bits/4
 %% 参数：
 %%   Bit: 当前字段分配的位，从 2 开始 (1 往往保留或避免混淆)
-%%   HasDirty: 标记是否找到了 dirtyFlag 字段
+%%   HasDirty: 标记是否找到了 dirty_flag 字段
 calc_field_bits([], _Bit, Map, HasDirty) ->
    {HasDirty, Map};
 calc_field_bits([F | Rest], Bit, Map, HasDirty) ->
@@ -329,7 +329,7 @@ flagToIndex(Flag, Index, Acc) ->
          flagToIndex(Flag bsr 1, Index + 1, Acc)
    end.
 
-%% Fields 应该是一个包含字段名的 Tuple，例如 {tag, id, hp, mp, ...}
+%% Fields 应该是一个包含字段名的list，例如 [id, hp, mp, ...] record_info(fields, Tag) 返回的就是这样的格式
 %% Record 是实际的 record 数据
 flagToValue(Flag, Fields, Record) ->
    flagToValue(Flag, Fields, Record, 1, []).
@@ -339,7 +339,7 @@ flagToValue(0, _Fields, _Record, _Index, Acc) ->
 flagToValue(Flag, Fields, Record, Index, Acc) ->
    case (Flag band 1) =:= 1 of
       true ->
-         flagToValue(Flag bsr 1, Fields, Record, Index + 1, [{element(Index, Fields), element(Index, Record)} | Acc]);
+         flagToValue(Flag bsr 1, Fields, Record, Index + 1, [{lists:nth(Index - 1, Fields), element(Index, Record)} | Acc]);
       _ ->
          flagToValue(Flag bsr 1, Fields, Record, Index + 1, Acc)
    end.
@@ -358,7 +358,7 @@ flagToIndexR(Index, Flag, Acc) ->
       _ -> flagToIndexR(Index - 1, Flag, Acc)
    end.
 
-%% Fields 应该是一个包含字段名的 Tuple，例如 {tag, id, hp, mp, ...}
+%% Fields 应该是一个包含字段名的list，例如 [id, hp, mp, ...] record_info(fields, Tag) 返回的就是这样的格式
 %% Record 是实际的 record 数据
 flagToValueR(0, _Fields, _Record) -> [];
 flagToValueR(Flag, Fields, Record) ->
@@ -371,7 +371,7 @@ flagToValueR(Index, Flag, Fields, Record, Acc) ->
    Bit = 1 bsl (Index - 1),
    case (Flag band Bit) =/= 0 of
       true ->
-         flagToValueR(Index - 1, Flag, Fields, Record, [{element(Index, Fields), element(Index, Record)} | Acc]);
+         flagToValueR(Index - 1, Flag, Fields, Record, [{lists:nth(Index - 1, Fields), element(Index, Record)} | Acc]);
       _ ->
          flagToValueR(Index - 1, Flag, Fields, Record, Acc)
    end.
